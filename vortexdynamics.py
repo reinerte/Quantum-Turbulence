@@ -8,80 +8,77 @@ from matplotlib import patches
 import scipy as sc
 from scipy import interpolate
 
-#TODO
-# Make Method of Images reliable
-# Color code vortices
-# Add dissipation
-
 # --- Initializations ---
-R = 10 # Radius of container
-Nvorts = 40
+R = 1. # Radius of container
+Nvorts = 10
 circs = np.ones(Nvorts); circs[:int(Nvorts/2.)] *= -1.0
 nt = 10000 # Temporal resolution
-r = np.zeros((nt,Nvorts,2))
-v = np.zeros_like(r)
-dt = 0.1
-t = np.linspace(0, 100, nt)
-r[0] = R*(np.random.random((Nvorts,2))- 1/2.)
-core = 0.5 #vortex core radius
-edge = 0.4 #boundary regime
+r = []#np.zeros((nt,Nvorts,2))
+v = []#np.zeros_like(r)
+dt = 0.001
+t = np.linspace(0, int(nt*dt), nt)
+r.append(R*(np.random.random((Nvorts,2))- 1/2.))
+core = 0.05 #vortex core radius
+prox = 0.02 #proximity
 gamma = 0.1 #dissipation param
 
-a = np.matrix([[1./4, 1./4 - np.sqrt(3)/6],
-               [1./4 + np.sqrt(3)/6, 1./4]])
+def rot(theta, side, ind):
+    temp = np.eye(2*side)
+    temp[ind[0],ind[0]] = np.cos(theta[ind[0], ind[0]]); temp[ind[0],ind[1]+side] = -np.sin(theta[ind[0], ind[1]])
+    temp[ind[1]+side,ind[0]] = np.sin(theta[ind[1], ind[0]]); temp[ind[1]+side,ind[1]+side] = np.cos(theta[ind[1], ind[1]])
+    return temp
 
-def vel(p):
-    pairedVorts = np.array(list(it.product(p, repeat=2))).reshape((Nvorts,Nvorts,2,2))
+t1 = time()
+for i in range(nt-1):
+    pairedVorts = np.array(list(it.product(r[-1], repeat=2))).reshape((Nvorts,Nvorts,2,2))
     vortDiffs = pairedVorts[:,:,0] - pairedVorts[:,:,1]
     numerators = np.cross([0,0,1], vortDiffs)[:,:,:-1]
     distsSq = np.linalg.norm(vortDiffs, axis=2)**2
+    # Removal of vortex pairs of opposite signs due to annihilation
+    annih = (np.sqrt(distsSq) < 2*prox) & (np.outer(circs,circs) < 0.0)
+    annih = list(set(np.ravel(np.where(annih==True))))
     # Method of Images
-    images = p*R*R/np.linalg.norm(p, axis=1)[:,None]**2
-    imDiffs = p - images
+    images = r[-1]*R*R/np.linalg.norm(r[-1], axis=1)[:,None]**2
+    imDiffs = r[-1] - images
     imNums = np.cross([0,0,1], imDiffs)[:,:-1]
     imDists = np.linalg.norm(imDiffs, axis=1)
     # dissipation
     #gamma * (np.einsum('i,ijk->jk', 1./np.abs(circs), np.multiply(np.outer(circs,circs), (vortDiffs/distsSq[:,:,None] + core**2)))  - \
-    return 1./(2*np.pi)*(np.einsum('i,ijk->jk', circs, \
-              numerators/(distsSq[:,:,None] + core**2) - \
-                   circs[:,None] * imNums/imDists[:,None]**2))
-
-t1 = time()
-for i in range(nt-1):
+    temp = 1./(2*np.pi)*(np.einsum('i,ijk->jk', circs, \
+              numerators/(distsSq[:,:,None] + core**2)) + \
+                   circs[:,None] * imNums/imDists[:,None]**2)
+    r[-1] = np.delete(r[-1], annih, axis=0)
+    temp = np.delete(temp, annih, axis=0)
+    circs = np.delete(circs, annih)
+    v.append(temp)
+    Nvorts -= len(annih)
     # Euler integrator
-    v[i] = vel(r[i])
-    r[i+1] = r[i] + dt*v[i]
-    # Symplectic integrator (k=4)
-#    w = np.array([vel(r[i]), vel(r[i])])
-#    for j in range(20):
-#        aw1 = a[0,0] * w[0] + a[0,1] * w[1]
-#        aw2 = a[1,0] * w[0] + a[1,1] * w[1]
-#        w = np.array([vel(r[i] + dt*aw1), \
-#                       vel(r[i] + dt*aw2)])
-#    r[i+1] = r[i] + dt/2.*(w[0] + w[1])
+    r.append(r[-1] + dt*v[-1])
+#    # Symplectic integrator(try with "static" omg)
+#    circsTemp = np.array(list(it.product(circs, repeat=2))).reshape((Nvorts,Nvorts,2))
+#    omega = 1./(distsSq+core**2)*(circsTemp[:,:,0] + circsTemp[:,:,1])
+#    #CentVort = np.einsum('ijk,->', pairedVorts, circsTemp)
+#    coords = np.concatenate((r[-1][:,0], r[-1][:,1]))
+#    temp1 = np.vstack((np.zeros(Nvorts-1), np.arange(Nvorts-1)+1)).T
+#    temp2 = np.vstack((np.arange(Nvorts-2)+1, np.arange(Nvorts-2)+2)).T
+#    multOrder = np.concatenate((temp1, temp2, temp2[::-1], temp1[::-1]))
+#    multOrder = np.array(multOrder, dtype=int)
+#    Phi = np.linalg.multi_dot([rot(omega*dt/.2, Nvorts, k) for k in multOrder])
+#    r.append(Phi.dot(coords).reshape((2, Nvorts)).T)
 
 print(time()-t1)
 
-# Constants of motion
-energy = np.sum(np.linalg.norm(v[:-1], axis=2)**2, axis=1)
-Q = r[:,:,0].dot(circs)
-P = r[:,:,1].dot(circs)
-QQPP = Q*Q + P*P
-enstrophy = np.sum(circs**2)
+v = np.array(v)
+r = np.array(r)
 
-print("#####")
+# Constants of motion
+energy = [sum(vel*vel) for vel in v]
+#enstrophy = np.sum(circs**2)
+#
+#print("#####")
 print("mean energy: ", np.mean(energy))
-print("std energy: ", np.std(energy))
-print("-----")
-print("mean Q: ", np.mean(Q))
-print("std Q: ", np.std(Q))
-print("-----")
-print("mean P: ", np.mean(P))
-print("std P: ", np.std(P))
-print("-----")
-print("mean QQPP: ", np.mean(QQPP))
-print("std QQPP: ", np.std(QQPP))
-print("#####")
+#print("std energy: ", np.std(energy))
+#print("#####")
 
 fig, ax = plt.subplots(figsize=(8,8))
 vorts, = plt.plot([],[], "bo")
@@ -99,7 +96,7 @@ time_text = ax.text(0.05, 0.9, '', transform=ax.transAxes)
 
 def update(i):
     time_text.set_text(time_template%(t[i]))
-    vorts.set_data(r[i,:,0], r[i,:,1])
+    vorts.set_data(r[i][:,0], r[i][:,1])
     return vorts, time_text
     
 anim = animation.FuncAnimation(fig, update, blit=False, interval=10,\
@@ -118,5 +115,4 @@ def onPress(event):
 
 fig.canvas.mpl_connect('key_press_event', onPress)
 
-#ani.save("vortices.mp4")
 plt.show()
